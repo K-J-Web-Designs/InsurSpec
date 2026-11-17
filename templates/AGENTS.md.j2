@@ -1,0 +1,34 @@
+# InsurSpec Agent Governance & Engineering Instructions
+
+> **Service:** `{{ service_name }}`  
+> **Line of Business:** `{{ line_of_business | upper }}`  
+> **Enterprise Domain:** `{{ domain | capitalize }}` (Owner: `{{ domain_architect_team }}`)  
+> **Backstage Catalog:** `./catalog-info.yaml` | **TechDocs:** `./mkdocs.yml`  
+
+---
+
+## 1. Mandatory Governing Constitution
+
+All AI coding agents operating in this VS Code workspace **MUST** read and strictly comply with:
+- **[`.insur-spec/memory/constitution.md`](.insur-spec/memory/constitution.md)**
+
+### Non-Negotiable Rules Summary (RFC 2119)
+1. **Zero AI Slop (Article I)**: Complete implementations only. Never emit placeholder stubs, `TODO`s, `NotImplementedError`, or truncating ellipses (`// ...rest of code...`). Do not add external packages when standard library primitives suffice.
+2. **Codebase Discovery First (Article II)**: Reuse existing utilities and patterns. Never swallow errors silently (`except: pass` or `catch (e) {}`).
+3. **Focused Testing — The Essential Triad (Article III)**: Zero vanity tests for getters/DTOs/frameworks. Keep unit tests focused on (1) Happy Path, (2) Key Boundary, and (3) Expected Failure, using parameterized/table-driven tests.
+4. **Zero-Destruction Data Preservation (Article IV)**: Never generate `DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, or `db:reset`. Use additive **Expand-Contract** migrations and soft deletes.
+5. **Universal Cross-Device Sync (Article V)**: Never store primary user state exclusively in device-local silos (`localStorage`, unsynced SQLite). State must be account-scoped and cloud-synced.
+6. **Security & PII/PHI Protection (Article VI)**: Never hardcode secrets or log unmasked PII/PHI (SSN, DOB, MRN, bank details).
+7. **The Ambiguity Gate (Article VII)**: Stop and ask the developer with 2–3 concrete options if requirements, schemas, or architectural choices are ambiguous.
+8. **5-Strike Circuit Breaker (Article VIII)**: Never loop more than 3–5 times on the same failing error. Halt, summarize diagnostics, and ask for intervention.
+9. **Spec-Before-Code (Article IX)**: Follow `spec.md` $\to$ `plan.md` (with `## Constitution Check`) $\to$ `tasks.md` $\to$ implementation.
+10. **Backstage.io Cataloging (Article X)**: Keep `catalog-info.yaml`, `mkdocs.yml`, and `/docs/` synchronized whenever APIs or schemas change.
+
+---
+
+## 2. Active Domain Skills
+Check `.insur-spec/config.yaml` and `.insur-spec/skills/` for domain-specific runbooks before implementing features.
+To inspect available skills from the terminal:
+```bash
+{{ cli_command }} skill list
+```

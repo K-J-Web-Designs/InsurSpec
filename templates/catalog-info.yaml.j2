@@ -1,0 +1,36 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ service_name }}
+  description: {{ service_description }}
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+    github.com/project-slug: {{ repo_slug }}
+    sonarqube.org/project-key: {{ service_name }}
+  tags:
+    - {{ line_of_business }}
+    - {{ domain }}
+    - insurspec-managed
+    - compliant-constitution
+spec:
+  type: service
+  lifecycle: {{ lifecycle | default("experimental") }}
+  owner: group:{{ domain_architect_team | default("enterprise-architecture") }}
+  system: {{ parent_system | default("insurance-core") }}
+  subcomponentOf: {{ domain }}-ecosystem
+  providesApis:
+    - {{ service_name }}-api
+  consumesApis: []
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: {{ service_name }}-api
+  description: OpenAPI 3.1 specification for {{ service_name }}
+spec:
+  type: openapi
+  lifecycle: {{ lifecycle | default("experimental") }}
+  owner: group:{{ domain_architect_team | default("enterprise-architecture") }}
+  system: {{ parent_system | default("insurance-core") }}
+  definition:
+    $text: ./docs/api/openapi.yaml

@@ -1,0 +1,13 @@
+site_name: {{ service_name }} Documentation
+site_description: Enterprise InsurSpec Generated TechDocs for {{ service_name }}
+site_author: {{ domain_architect_team | default("Enterprise Architecture") }}
+
+plugins:
+  - techdocs-core
+
+nav:
+  - System Overview: index.md
+  - Architecture (C4 Model): architecture.md
+  - API Reference: api_reference.md
+  - Data Lineage: data_model.md
+  - Compliance Receipts: compliance.md

@@ -1,0 +1,111 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "featureDirective",
+      "type": "promptString",
+      "description": "Enter the high-level feature requirement or Jira story for /specify:"
+    },
+    {
+      "id": "skillName",
+      "type": "promptString",
+      "description": "Enter the new skill name (kebab-case):"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "InsurSpec: 1. Specify Feature (/specify)",
+      "type": "shell",
+      "command": "{{ cli_command }} specify \"${input:featureDirective}\"",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: 1b. Add Incremental Feature (/specify --add)",
+      "type": "shell",
+      "command": "{{ cli_command }} specify --add \"${input:featureDirective}\"",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: 2. Plan & Constitution Check (/plan)",
+      "type": "shell",
+      "command": "{{ cli_command }} plan",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: 3. Generate TDD Tasks (/tasks)",
+      "type": "shell",
+      "command": "{{ cli_command }} tasks",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: 4. Implement with Skills (/implement)",
+      "type": "shell",
+      "command": "{{ cli_command }} implement",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: 5. Verify & Sign Compliance Receipt (/verify)",
+      "type": "shell",
+      "command": "{{ cli_command }} verify",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: List Domain Skills",
+      "type": "shell",
+      "command": "{{ cli_command }} skill list",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: Add Custom Domain Skill",
+      "type": "shell",
+      "command": "{{ cli_command }} skill add \"${input:skillName}\"",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: View Governing Constitution",
+      "type": "shell",
+      "command": "{{ cli_command }} constitution",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    }
+  ]
+}
