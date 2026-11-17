@@ -58,6 +58,72 @@ def _update_feature_phase(fsm: PhaseStateMachine, slug: Optional[str], phase: st
         fsm.state.features[slug]["phase"] = phase
 
 
+COPILOT_PROMPTS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "insur-specify",
+        "Elicit v1 insurance feature requirements into spec.md",
+        "[feature requirement]",
+        "Run `{cli} specify \"<requirement>\"` (obeying `.insur-spec/memory/constitution.md`) and summarize any `## 5. Ambiguity Triage` items before proceeding to `/insur-plan`.",
+    ),
+    (
+        "insur-feature-add",
+        "Add an incremental brownfield feature without overwriting v1 spec.md",
+        "[new feature requirement]",
+        "Run `{cli} specify --add \"<requirement>\"` to create `.insur-spec/features/<NNN-slug>/spec.md` and append a `## Feature Delta Log` entry to root `spec.md`. Preserve v1 contracts.",
+    ),
+    (
+        "insur-plan",
+        "Generate technical architecture plan.md and run Constitution Check",
+        "[optional --feature <slug>]",
+        "Run `{cli} plan` (or `{cli} plan --feature <slug>`) and verify zero Constitution Gatekeeper violations.",
+    ),
+    (
+        "insur-tasks",
+        "Deconstruct plan.md into atomic Essential Triad TDD tasks",
+        "[optional --feature <slug>]",
+        "Run `{cli} tasks` (or `{cli} tasks --feature <slug>`) to generate `tasks.md`.",
+    ),
+    (
+        "insur-implement",
+        "Implement tasks.md using active domain skills and 5-Strike Breaker",
+        "[optional --verify-cmd pytest]",
+        "Run `{cli} implement` (with `--verify-cmd \"pytest\"` when tests exist), strictly obeying `.insur-spec/memory/constitution.md`.",
+    ),
+    (
+        "insur-qa",
+        "Generate Essential Triad QA tests (Happy Path, Key Boundary, Failure)",
+        "[optional --feature <slug>]",
+        "Run `{cli} qa` (or `{cli} qa --feature <slug>`) to generate parameterized QA tests enforcing Article III (Essential Triad) and run `pytest`.",
+    ),
+    (
+        "insur-verify",
+        "Run final Constitution Gate and sign COMPLIANCE_RECEIPT.json",
+        "[optional --feature <slug>]",
+        "Run `{cli} verify` (or use MCP tool `insur_spec_verify`) to audit compliance and sign `COMPLIANCE_RECEIPT.json`.",
+    ),
+)
+
+
+def _scaffold_copilot_prompts(github_dir: Path, cli_command: str) -> None:
+    prompts_dir = github_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    for name, description, arg_hint, body_tmpl in COPILOT_PROMPTS:
+        target = prompts_dir / f"{name}.prompt.md"
+        if target.is_file():
+            continue
+        body = body_tmpl.format(cli=cli_command)
+        target.write_text(
+            f"---\n"
+            f"name: \"{name}\"\n"
+            f"description: \"{description}\"\n"
+            f"argument-hint: \"{arg_hint}\"\n"
+            f"agent: \"agent\"\n"
+            f"---\n\n"
+            f"{body}\n",
+            encoding="utf-8",
+        )
+
+
 @app.command()
 def init(
     service_name: str = typer.Option("insurance-service", "--name", "-n", help="Microservice or repository name"),
@@ -159,6 +225,7 @@ def init(
     copilot_target = github_dir / "copilot-instructions.md"
     if not copilot_target.is_file():
         copilot_target.write_text(rendered_agents, encoding="utf-8")
+    _scaffold_copilot_prompts(github_dir, cli_command)
 
     # 6. Initialize State Machine
     fsm = PhaseStateMachine(root)
@@ -394,6 +461,57 @@ def implement(
     _update_feature_phase(fsm, active_slug, LifecyclePhase.IMPLEMENTED.value)
     fsm.transition(LifecyclePhase.IMPLEMENTED, {"files_written": result.files_written, "attempts": result.attempts, "feature": active_slug})
     console.print(f"[bold green]✔ {result.message}[/bold green] (Files written: {len(result.files_written)})")
+
+
+@app.command()
+def qa(
+    verify_cmd: Optional[str] = typer.Option(None, "--verify-cmd", help="Optional test runner command (e.g. 'pytest')"),
+    feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+):
+    """Generates Essential Triad QA tests (Happy Path, Key Boundary, Expected Failure) for the active spec."""
+    root = find_workspace_root()
+    cfg = load_config(root)
+    fsm = PhaseStateMachine(root)
+    registry = FeatureRegistry(root)
+    active_slug = _resolve_active_feature(fsm, feature)
+    spec_file, plan_file, tasks_file = registry.resolve_paths(active_slug)
+
+    mgr = SkillsManager(root)
+    loader = SkillsLoader(mgr)
+    skills_prompt = loader.assemble_skills_context(["test-triad-generator", "phi-pii-token-masker"])
+    brownfield_ctx = registry.build_brownfield_context(active_slug=active_slug)
+    system_instructions = _load_constitution_text(root) + skills_prompt + ("\n\n" + brownfield_ctx if brownfield_ctx else "")
+
+    spec_text = spec_file.read_text(encoding="utf-8") if spec_file.is_file() else ""
+    plan_text = plan_file.read_text(encoding="utf-8") if plan_file.is_file() else ""
+    tasks_text = tasks_file.read_text(encoding="utf-8") if tasks_file.is_file() else ""
+
+    qa_prompt = (
+        "Generate focused QA unit/integration tests in `tests/` enforcing Article III (The Essential Triad: "
+        "Happy Path, Key Boundary, Expected Failure) using parameterized tests where applicable and zero vanity tests.\n\n"
+        f"## Specification\n{spec_text}\n\n"
+        f"## Architecture Plan\n{plan_text}\n\n"
+        f"## Tasks\n{tasks_text}\n"
+    )
+
+    provider = LLMSwitchboard.get_provider(cfg.llm_provider, gemini_model=cfg.gemini_model, bedrock_model=cfg.bedrock_model, aws_region=cfg.aws_region)
+    executor = ImplementExecutor(workspace_root=root, provider=provider)
+
+    verify_fn = None
+    if verify_cmd:
+        cmd_parts = verify_cmd.split()
+        verify_fn = lambda: ImplementExecutor.run_shell_check(cmd_parts, root)
+
+    console.print(f"[bold cyan]▶ Generating Essential Triad QA tests{f' for {active_slug}' if active_slug else ''}...[/bold cyan]")
+    result = executor.run_loop(tasks_markdown=qa_prompt, system_instructions=system_instructions, verify_fn=verify_fn)
+
+    if not result.success:
+        console.print(f"[bold red]✖ QA test generation halted after {result.attempts} attempt(s):[/bold red] {result.message}")
+        if result.incident:
+            console.print(f"[yellow]Last error sample:[/yellow]\n{result.incident.last_error_sample}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[bold green]✔ QA generation complete: {result.message}[/bold green] (Test files written: {len(result.files_written)})")
 
 
 @app.command()

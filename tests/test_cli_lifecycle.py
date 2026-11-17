@@ -24,6 +24,20 @@ def test_full_lifecycle_e2e():
             assert (Path(tmpdir) / "AGENTS.md").is_file()
             assert (Path(tmpdir) / ".github" / "copilot-instructions.md").is_file()
 
+            prompts_dir = Path(tmpdir) / ".github" / "prompts"
+            for prompt_name in (
+                "insur-specify",
+                "insur-feature-add",
+                "insur-plan",
+                "insur-tasks",
+                "insur-implement",
+                "insur-qa",
+                "insur-verify",
+            ):
+                p_file = prompts_dir / f"{prompt_name}.prompt.md"
+                assert p_file.is_file()
+                assert "description:" in p_file.read_text(encoding="utf-8")
+
             tasks_json = Path(tmpdir) / ".vscode" / "tasks.json"
             assert tasks_json.is_file()
             parsed_tasks = json.loads(tasks_json.read_text(encoding="utf-8"))
@@ -50,9 +64,12 @@ def test_full_lifecycle_e2e():
             assert res_tasks.exit_code == 0, res_tasks.output
             assert (Path(tmpdir) / "tasks.md").is_file()
 
-            # 5. implement
+            # 5. implement & qa
             res_imp = runner.invoke(app, ["implement"])
             assert res_imp.exit_code == 0, res_imp.output
+
+            res_qa = runner.invoke(app, ["qa"])
+            assert res_qa.exit_code == 0, res_qa.output
 
             # 6. verify (generates signed receipt)
             res_ver = runner.invoke(app, ["verify"])
