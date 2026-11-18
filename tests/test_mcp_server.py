@@ -33,3 +33,24 @@ def test_mcp_tool_call_skill_list_and_audit(tmp_path: Path):
     assert skills_resp["result"]["isError"] is False
     parsed = json.loads(skills_resp["result"]["content"][0]["text"])
     assert len(parsed) >= 25
+
+
+def test_mcp_resources_and_prompts(tmp_path: Path):
+    (tmp_path / "spec.md").write_text("# Master Spec", encoding="utf-8")
+    server = InsurSpecMCPServer(workspace_root=tmp_path)
+
+    res_list = server.handle_request({"jsonrpc": "2.0", "id": 10, "method": "resources/list", "params": {}})
+    assert res_list is not None
+    uris = [r["uri"] for r in res_list["result"]["resources"]]
+    assert "insurspec://constitution" in uris
+    assert "insurspec://spec" in uris
+
+    res_read = server.handle_request({"jsonrpc": "2.0", "id": 11, "method": "resources/read", "params": {"uri": "insurspec://spec"}})
+    assert res_read is not None
+    assert "# Master Spec" in res_read["result"]["contents"][0]["text"]
+
+    prompts_list = server.handle_request({"jsonrpc": "2.0", "id": 12, "method": "prompts/list", "params": {}})
+    assert prompts_list is not None
+    prompt_names = [p["name"] for p in prompts_list["result"]["prompts"]]
+    assert "insur-review" in prompt_names
+    assert "insur-quick" in prompt_names

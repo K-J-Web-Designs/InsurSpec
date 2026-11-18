@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import shutil
 import sys
@@ -19,10 +21,12 @@ from .core.circuit_breaker import CircuitBreaker
 from .core.audit_signer import AuditSigner
 from .core.executor import ImplementExecutor
 from .core.feature_registry import FeatureRegistry
+from .core.reviewer import DiffReviewer
 from .llm.switchboard import LLMSwitchboard
 from .mcp_server import InsurSpecMCPServer
 from .skills.manager import SkillsManager, ConstitutionalViolationError
 from .skills.loader import SkillsLoader
+from .skills.router import SkillRouter
 
 app = typer.Typer(
     name="insur-spec",
@@ -58,6 +62,29 @@ def _update_feature_phase(fsm: PhaseStateMachine, slug: Optional[str], phase: st
         fsm.state.features[slug]["phase"] = phase
 
 
+def _generate_text(provider, prompt: str, system_instructions: str, stream: bool = False) -> str:
+    if not stream:
+        return provider.generate(prompt=prompt, system_instructions=system_instructions)
+
+    async def _collect() -> str:
+        chunks: list[str] = []
+        async for chunk in provider.stream_generate(prompt=prompt, system_instructions=system_instructions):
+            console.print(chunk, end="")
+            chunks.append(chunk)
+        console.print("")
+        return "".join(chunks)
+
+    return asyncio.run(_collect())
+
+
+def _print_dry_run_diffs(diffs: list[str]) -> None:
+    if not diffs:
+        console.print("[yellow]Dry-run: No file changes proposed.[/yellow]")
+        return
+    for diff in diffs:
+        console.print(Panel(diff.strip(), title="Dry-Run Unified Diff"))
+
+
 COPILOT_PROMPTS: tuple[tuple[str, str, str, str], ...] = (
     (
         "insur-specify",
@@ -70,6 +97,12 @@ COPILOT_PROMPTS: tuple[tuple[str, str, str, str], ...] = (
         "Add an incremental brownfield feature without overwriting v1 spec.md",
         "[new feature requirement]",
         "Run `{cli} specify --add \"<requirement>\"` to create `.insur-spec/features/<NNN-slug>/spec.md` and append a `## Feature Delta Log` entry to root `spec.md`. Preserve v1 contracts.",
+    ),
+    (
+        "insur-grill",
+        "Resolve Ambiguity Triage questions interactively before planning",
+        "[optional --feature <slug>]",
+        "Run `{cli} grill` (or `{cli} grill --feature <slug>`) to clarify open `## 5. Ambiguity Triage` items and record decisions in `spec.md`.",
     ),
     (
         "insur-plan",
@@ -86,8 +119,8 @@ COPILOT_PROMPTS: tuple[tuple[str, str, str, str], ...] = (
     (
         "insur-implement",
         "Implement tasks.md using active domain skills and 5-Strike Breaker",
-        "[optional --verify-cmd pytest]",
-        "Run `{cli} implement` (with `--verify-cmd \"pytest\"` when tests exist), strictly obeying `.insur-spec/memory/constitution.md`.",
+        "[optional --verify-cmd pytest --dry-run]",
+        "Run `{cli} implement` (with `--verify-cmd \"pytest\"` or `--dry-run`), strictly obeying `.insur-spec/memory/constitution.md`.",
     ),
     (
         "insur-qa",
@@ -106,6 +139,18 @@ COPILOT_PROMPTS: tuple[tuple[str, str, str, str], ...] = (
         "Generate or update a comprehensive project README.md",
         "[optional --feature <slug>]",
         "Run `{cli} readme` to generate or update `README.md` with setup, architecture, endpoints, compliance, and usage instructions.",
+    ),
+    (
+        "insur-review",
+        "Audit git diff against Constitution, PII/PHI, and secret hygiene",
+        "[optional --base main --staged]",
+        "Run `{cli} review` before opening a PR to catch Constitutional, secret, or PII violations in your diff.",
+    ),
+    (
+        "insur-quick",
+        "Fast-track small fix with mini-spec, targeted edit, and Constitution gate",
+        "[small fix or task]",
+        "Run `{cli} quick \"<task>\" --verify-cmd \"pytest\"` for a lightweight single-command Constitution-guarded change.",
     ),
     (
         "insur-verify",
@@ -134,6 +179,49 @@ def _scaffold_copilot_prompts(github_dir: Path, cli_command: str) -> None:
             f"{body}\n",
             encoding="utf-8",
         )
+
+
+def _scaffold_claude_integration(root: Path, rendered_agents: str, cli_command: str) -> None:
+    claude_md = root / "CLAUDE.md"
+    if not claude_md.is_file():
+        claude_md.write_text(
+            f"# Claude Code Governance\n\n@AGENTS.md\n\n@.insur-spec/memory/constitution.md\n",
+            encoding="utf-8",
+        )
+    claude_dir = root / ".claude"
+    commands_dir = claude_dir / "commands"
+    commands_dir.mkdir(parents=True, exist_ok=True)
+    for name, description, arg_hint, body_tmpl in COPILOT_PROMPTS:
+        cmd_file = commands_dir / f"{name}.md"
+        if not cmd_file.is_file():
+            body = body_tmpl.format(cli=cli_command)
+            cmd_file.write_text(
+                f"---\ndescription: {description}\nargument-hint: {arg_hint}\n---\n\n{body}\n",
+                encoding="utf-8",
+            )
+    settings_file = claude_dir / "settings.json"
+    if not settings_file.is_file():
+        settings_payload = {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{"type": "command", "command": f"{cli_command} review --staged"}],
+                    }
+                ]
+            }
+        }
+        settings_file.write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+
+
+def _scaffold_git_precommit(root: Path, cli_command: str) -> None:
+    hooks_dir = root / ".git" / "hooks"
+    if not (root / ".git").is_dir():
+        return
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hook_file = hooks_dir / "pre-commit"
+    if not hook_file.is_file():
+        hook_file.write_text(f"#!/bin/sh\n{cli_command} review --staged\n", encoding="utf-8")
 
 
 @app.command()
@@ -238,6 +326,8 @@ def init(
     if not copilot_target.is_file():
         copilot_target.write_text(rendered_agents, encoding="utf-8")
     _scaffold_copilot_prompts(github_dir, cli_command)
+    _scaffold_claude_integration(root, rendered_agents, cli_command)
+    _scaffold_git_precommit(root, cli_command)
 
     # 6. Initialize State Machine
     fsm = PhaseStateMachine(root)
@@ -260,6 +350,7 @@ def specify(
     directive: str = typer.Argument(..., help="High-level business requirement or feature description"),
     add: bool = typer.Option(False, "--add", "-a", help="Add an incremental feature while preserving root spec.md"),
     feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Explicit kebab-case feature slug"),
+    stream: bool = typer.Option(False, "--stream", help="Stream LLM output live to terminal"),
 ):
     """Elicits structured requirements and authors spec.md (or an incremental feature spec)."""
     root = find_workspace_root()
@@ -294,9 +385,11 @@ def specify(
         prompt_parts.append(f"Existing System Context (do not break v1 contracts):\n{brownfield_ctx}")
     prompt_parts.append(f"Requirement: {directive}\n\nTemplate:\n{rendered_base}")
 
-    llm_output = provider.generate(
+    llm_output = _generate_text(
+        provider,
         prompt="\n\n".join(prompt_parts),
         system_instructions=_load_constitution_text(root),
+        stream=stream,
     )
 
     spec_content = rendered_base if _is_mock_response(llm_output) else llm_output
@@ -328,6 +421,7 @@ def specify(
 @app.command()
 def plan(
     feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+    stream: bool = typer.Option(False, "--stream", help="Stream LLM output live to terminal"),
 ):
     """Synthesizes technical architecture plan and executes the mandatory Constitution Check."""
     root = find_workspace_root()
@@ -354,9 +448,11 @@ def plan(
     prompt_parts.append(f"Specification:\n{spec_text}\n\nTemplate:\n{rendered_base}")
 
     provider = LLMSwitchboard.get_provider(cfg.llm_provider, gemini_model=cfg.gemini_model, bedrock_model=cfg.bedrock_model, aws_region=cfg.aws_region)
-    llm_output = provider.generate(
+    llm_output = _generate_text(
+        provider,
         prompt="\n\n".join(prompt_parts),
         system_instructions=_load_constitution_text(root),
+        stream=stream,
     )
 
     plan_file.parent.mkdir(parents=True, exist_ok=True)
@@ -387,6 +483,7 @@ def plan(
 @app.command()
 def tasks(
     feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+    stream: bool = typer.Option(False, "--stream", help="Stream LLM output live to terminal"),
 ):
     """Deconstructs the plan into atomic TDD implementation tasks."""
     root = find_workspace_root()
@@ -407,9 +504,11 @@ def tasks(
     prompt_parts.append(f"Plan:\n{plan_text}\n\nTemplate:\n{rendered_base}")
 
     provider = LLMSwitchboard.get_provider(cfg.llm_provider, gemini_model=cfg.gemini_model, bedrock_model=cfg.bedrock_model, aws_region=cfg.aws_region)
-    llm_output = provider.generate(
+    llm_output = _generate_text(
+        provider,
         prompt="\n\n".join(prompt_parts),
         system_instructions=_load_constitution_text(root),
+        stream=stream,
     )
 
     tasks_file.parent.mkdir(parents=True, exist_ok=True)
@@ -430,6 +529,8 @@ def tasks(
 def implement(
     verify_cmd: Optional[str] = typer.Option(None, "--verify-cmd", help="Optional test command to run after synthesis (e.g. 'pytest')"),
     feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview unified diffs without modifying files"),
+    auto_skills: bool = typer.Option(True, "--auto-skills/--no-auto-skills", help="Auto-route relevant skills from spec.md"),
 ):
     """Synthesizes code for tasks using active domain skills and the 5-Strike Circuit Breaker."""
     root = find_workspace_root()
@@ -437,15 +538,20 @@ def implement(
     fsm = PhaseStateMachine(root)
     registry = FeatureRegistry(root)
     active_slug = _resolve_active_feature(fsm, feature)
-    _, _, tasks_file = registry.resolve_paths(active_slug)
+    spec_file, _, tasks_file = registry.resolve_paths(active_slug)
 
+    mgr = SkillsManager(root)
     skill_names = list(cfg.active_skills)
+    if auto_skills and spec_file.is_file():
+        routed = SkillRouter.select_skills(spec_file.read_text(encoding="utf-8"), mgr.list_skills())
+        for r in routed:
+            if r not in skill_names:
+                skill_names.append(r)
     if active_slug:
         for brownfield_skill in ("backward-compat-api-guard", "expand-contract-db-migrator"):
             if brownfield_skill not in skill_names:
                 skill_names.append(brownfield_skill)
 
-    mgr = SkillsManager(root)
     loader = SkillsLoader(mgr)
     skills_prompt = loader.assemble_skills_context(skill_names)
     brownfield_ctx = registry.build_brownfield_context(active_slug=active_slug) if active_slug else ""
@@ -462,13 +568,17 @@ def implement(
         verify_fn = lambda: ImplementExecutor.run_shell_check(cmd_parts, root)
 
     console.print(f"[bold cyan]▶ Injected {len(skill_names)} domain skills into execution context.[/bold cyan]")
-    result = executor.run_loop(tasks_markdown=tasks_md, system_instructions=system_instructions, verify_fn=verify_fn)
+    result = executor.run_loop(tasks_markdown=tasks_md, system_instructions=system_instructions, verify_fn=verify_fn, dry_run=dry_run)
 
     if not result.success:
         console.print(f"[bold red]✖ Implementation halted after {result.attempts} attempt(s):[/bold red] {result.message}")
         if result.incident:
             console.print(f"[yellow]Last error sample:[/yellow]\n{result.incident.last_error_sample}")
         raise typer.Exit(code=1)
+
+    if dry_run:
+        _print_dry_run_diffs(result.diffs)
+        return
 
     _update_feature_phase(fsm, active_slug, LifecyclePhase.IMPLEMENTED.value)
     fsm.transition(LifecyclePhase.IMPLEMENTED, {"files_written": result.files_written, "attempts": result.attempts, "feature": active_slug})
@@ -479,6 +589,7 @@ def implement(
 def qa(
     verify_cmd: Optional[str] = typer.Option(None, "--verify-cmd", help="Optional test runner command (e.g. 'pytest')"),
     feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview unified diffs without modifying files"),
 ):
     """Generates Essential Triad QA tests (Happy Path, Key Boundary, Expected Failure) for the active spec."""
     root = find_workspace_root()
@@ -515,13 +626,17 @@ def qa(
         verify_fn = lambda: ImplementExecutor.run_shell_check(cmd_parts, root)
 
     console.print(f"[bold cyan]▶ Generating Essential Triad QA tests{f' for {active_slug}' if active_slug else ''}...[/bold cyan]")
-    result = executor.run_loop(tasks_markdown=qa_prompt, system_instructions=system_instructions, verify_fn=verify_fn)
+    result = executor.run_loop(tasks_markdown=qa_prompt, system_instructions=system_instructions, verify_fn=verify_fn, dry_run=dry_run)
 
     if not result.success:
         console.print(f"[bold red]✖ QA test generation halted after {result.attempts} attempt(s):[/bold red] {result.message}")
         if result.incident:
             console.print(f"[yellow]Last error sample:[/yellow]\n{result.incident.last_error_sample}")
         raise typer.Exit(code=1)
+
+    if dry_run:
+        _print_dry_run_diffs(result.diffs)
+        return
 
     console.print(f"[bold green]✔ QA generation complete: {result.message}[/bold green] (Test files written: {len(result.files_written)})")
 
@@ -531,6 +646,7 @@ def _run_doc_synthesis(
     prompt_body: str,
     skills: list[str],
     feature: Optional[str] = None,
+    dry_run: bool = False,
 ) -> None:
     """Shared helper for documentation and README synthesis commands."""
     root = find_workspace_root()
@@ -562,10 +678,14 @@ def _run_doc_synthesis(
     executor = ImplementExecutor(workspace_root=root, provider=provider)
 
     console.print(f"[bold cyan]▶ Running {task_label}{f' for {active_slug}' if active_slug else ''}...[/bold cyan]")
-    result = executor.run_loop(tasks_markdown=full_prompt, system_instructions=system_instructions)
+    result = executor.run_loop(tasks_markdown=full_prompt, system_instructions=system_instructions, dry_run=dry_run)
     if not result.success:
         console.print(f"[bold red]✖ {task_label} halted after {result.attempts} attempt(s):[/bold red] {result.message}")
         raise typer.Exit(code=1)
+
+    if dry_run:
+        _print_dry_run_diffs(result.diffs)
+        return
 
     console.print(f"[bold green]✔ {task_label} complete: {result.message}[/bold green] (Files written: {len(result.files_written)})")
 
@@ -573,6 +693,7 @@ def _run_doc_synthesis(
 @app.command()
 def document(
     feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview unified diffs without modifying files"),
 ):
     """Generates technical documentation in docs/ synchronized with Backstage TechDocs (Article X)."""
     _run_doc_synthesis(
@@ -583,12 +704,14 @@ def document(
         ),
         skills=["backstage-techdocs-cataloger", "adr-architectural-decision"],
         feature=feature,
+        dry_run=dry_run,
     )
 
 
 @app.command()
 def readme(
     feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview unified diffs without modifying files"),
 ):
     """Generates or updates a comprehensive root README.md from specs, plan, and repository files."""
     _run_doc_synthesis(
@@ -599,7 +722,110 @@ def readme(
         ),
         skills=["backstage-techdocs-cataloger"],
         feature=feature,
+        dry_run=dry_run,
     )
+
+
+@app.command()
+def grill(
+    feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+):
+    """Interactively resolves open Ambiguity Triage items in spec.md before planning (Article VII)."""
+    root = find_workspace_root()
+    fsm = PhaseStateMachine(root)
+    registry = FeatureRegistry(root)
+    active_slug = _resolve_active_feature(fsm, feature)
+    spec_file, _, _ = registry.resolve_paths(active_slug)
+
+    if not spec_file.is_file():
+        console.print("[bold red]No spec.md found. Run `insur-spec specify` first.[/bold red]")
+        raise typer.Exit(code=1)
+
+    spec_text = spec_file.read_text(encoding="utf-8")
+    triage_marker = "## 5. Ambiguity Triage"
+    questions: list[str] = []
+    if triage_marker in spec_text:
+        triage_section = spec_text.split(triage_marker, 1)[1]
+        for line in triage_section.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("- ", "* ")) or (len(stripped) > 2 and stripped[0].isdigit() and stripped[1] == "."):
+                questions.append(stripped.lstrip("-*0123456789. "))
+
+    if not questions:
+        console.print("[bold green]✔ No open ambiguity bullet items found under '## 5. Ambiguity Triage'.[/bold green]")
+        return
+
+    resolutions: list[str] = []
+    for idx, q in enumerate(questions, start=1):
+        answer = typer.prompt(f"[{idx}/{len(questions)}] {q}")
+        resolutions.append(f"- **Q{idx}:** {q}\n  - **Decision:** {answer}")
+
+    resolved_block = "\n\n## 5b. Ambiguity Triage (Resolved)\n" + "\n".join(resolutions) + "\n"
+    spec_file.write_text(spec_text.rstrip() + resolved_block, encoding="utf-8")
+    console.print(f"[bold green]✔ Recorded {len(resolutions)} decision(s) in {spec_file.name}.[/bold green]")
+
+
+@app.command()
+def quick(
+    directive: str = typer.Argument(..., help="Small bug fix or single-turn feature directive"),
+    verify_cmd: Optional[str] = typer.Option(None, "--verify-cmd", help="Optional test command (e.g. 'pytest')"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview unified diffs without modifying files"),
+):
+    """Fast-track mode: runs targeted edit + Essential Triad test + Constitution check in one command."""
+    root = find_workspace_root()
+    cfg = load_config(root)
+    registry = FeatureRegistry(root)
+    mgr = SkillsManager(root)
+
+    routed = SkillRouter.select_skills(directive, mgr.list_skills())
+    loader = SkillsLoader(mgr)
+    skills_prompt = loader.assemble_skills_context(routed)
+    brownfield_ctx = registry.build_brownfield_context()
+    system_instructions = _load_constitution_text(root) + skills_prompt + ("\n\n" + brownfield_ctx if brownfield_ctx else "")
+
+    provider = LLMSwitchboard.get_provider(cfg.llm_provider, gemini_model=cfg.gemini_model, bedrock_model=cfg.bedrock_model, aws_region=cfg.aws_region)
+    executor = ImplementExecutor(workspace_root=root, provider=provider)
+    verify_fn = (lambda: ImplementExecutor.run_shell_check(verify_cmd.split(), root)) if verify_cmd else None
+
+    quick_tasks = (
+        f"Fast-Track Task: {directive}\n"
+        "- Prefer targeted `<<<EDIT>>>` blocks on existing files.\n"
+        "- Include Essential Triad test coverage.\n"
+    )
+    console.print(f"[bold cyan]▶ Fast-track executing with {len(routed)} auto-routed skills...[/bold cyan]")
+    result = executor.run_loop(tasks_markdown=quick_tasks, system_instructions=system_instructions, verify_fn=verify_fn, dry_run=dry_run)
+    if not result.success:
+        console.print(f"[bold red]✖ Fast-track halted:[/bold red] {result.message}")
+        raise typer.Exit(code=1)
+
+    if dry_run:
+        _print_dry_run_diffs(result.diffs)
+        return
+
+    console.print(f"[bold green]✔ Fast-track complete: {result.message}[/bold green] (Files written: {len(result.files_written)})")
+
+
+@app.command()
+def review(
+    base: str = typer.Option("main", "--base", "-b", help="Base git ref for diff comparison"),
+    staged: bool = typer.Option(False, "--staged", help="Review staged git changes only"),
+):
+    """Audits git diff against the 10-Article Constitution, PII/PHI, and secret hygiene."""
+    root = find_workspace_root()
+    reviewer = DiffReviewer(root)
+    diff_text = reviewer.get_git_diff(base_ref=base, staged=staged)
+    if not diff_text.strip():
+        console.print("[green]✔ No diff changes to review.[/green]")
+        return
+
+    report = reviewer.review_diff_text(diff_text)
+    if not report.passed:
+        console.print(f"[bold red]✖ Review FAILED ({len(report.findings)} finding(s) across {report.files_reviewed} file(s)):[/bold red]")
+        for f in report.findings:
+            console.print(f"  • [{f.severity}] {f.category} - {f.description} ({f.file_path}:{f.line_number})")
+        raise typer.Exit(code=1)
+
+    console.print(f"[bold green]✔ Diff Review PASSED ({report.files_reviewed} file(s), 0 blocker findings).[/bold green]")
 
 
 @app.command()

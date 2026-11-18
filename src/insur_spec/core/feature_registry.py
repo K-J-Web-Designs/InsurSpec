@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 import time
 from pathlib import Path
@@ -123,6 +124,10 @@ class FeatureRegistry:
             file_list = "\n".join(f"- {p}" for p in tracked_files[:60])
             sections.append(f"### Existing Repository Files\n{file_list}")
 
+        symbol_lines = self._build_ast_symbol_map(tracked_files)
+        if symbol_lines:
+            sections.append("### Existing Python Symbol Map\n" + "\n".join(symbol_lines[:50]))
+
         if active_slug:
             sections.append(
                 f"### Incremental Feature Constraint\n"
@@ -131,3 +136,26 @@ class FeatureRegistry:
             )
 
         return "\n\n".join(sections)
+
+    def _build_ast_symbol_map(self, rel_paths: list[str]) -> list[str]:
+        """Extracts lightweight class/function signatures from Python files for brownfield context."""
+        lines: list[str] = []
+        for rel in rel_paths[:30]:
+            if not rel.endswith(".py"):
+                continue
+            full_path = self.workspace_root / rel
+            try:
+                tree = ast.parse(full_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            symbols: list[str] = []
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef):
+                    methods = [n.name for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and not n.name.startswith("_")]
+                    symbols.append(f"class {node.name}({', '.join(methods[:6])})")
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
+                    args = [a.arg for a in node.args.args if a.arg != "self"]
+                    symbols.append(f"def {node.name}({', '.join(args[:5])})")
+            if symbols:
+                lines.append(f"- `{rel}`: " + "; ".join(symbols))
+        return lines

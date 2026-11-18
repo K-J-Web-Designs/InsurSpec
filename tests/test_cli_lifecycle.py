@@ -28,17 +28,24 @@ def test_full_lifecycle_e2e():
             for prompt_name in (
                 "insur-specify",
                 "insur-feature-add",
+                "insur-grill",
                 "insur-plan",
                 "insur-tasks",
                 "insur-implement",
                 "insur-qa",
                 "insur-document",
                 "insur-readme",
+                "insur-review",
+                "insur-quick",
                 "insur-verify",
             ):
                 p_file = prompts_dir / f"{prompt_name}.prompt.md"
                 assert p_file.is_file()
                 assert "description:" in p_file.read_text(encoding="utf-8")
+                assert (Path(tmpdir) / ".claude" / "commands" / f"{prompt_name}.md").is_file()
+
+            assert (Path(tmpdir) / "CLAUDE.md").is_file()
+            assert (Path(tmpdir) / ".claude" / "settings.json").is_file()
 
             tasks_json = Path(tmpdir) / ".vscode" / "tasks.json"
             assert tasks_json.is_file()
@@ -78,6 +85,12 @@ def test_full_lifecycle_e2e():
 
             res_readme = runner.invoke(app, ["readme"])
             assert res_readme.exit_code == 0, res_readme.output
+
+            res_quick = runner.invoke(app, ["quick", "Validate policy effective date", "--dry-run"])
+            assert res_quick.exit_code == 0, res_quick.output
+
+            res_grill = runner.invoke(app, ["grill"])
+            assert res_grill.exit_code == 0, res_grill.output
 
             # 6. verify (generates signed receipt)
             res_ver = runner.invoke(app, ["verify"])
