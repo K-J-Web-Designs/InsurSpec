@@ -32,6 +32,8 @@ def test_full_lifecycle_e2e():
                 "insur-tasks",
                 "insur-implement",
                 "insur-qa",
+                "insur-document",
+                "insur-readme",
                 "insur-verify",
             ):
                 p_file = prompts_dir / f"{prompt_name}.prompt.md"
@@ -64,12 +66,18 @@ def test_full_lifecycle_e2e():
             assert res_tasks.exit_code == 0, res_tasks.output
             assert (Path(tmpdir) / "tasks.md").is_file()
 
-            # 5. implement & qa
+            # 5. implement, qa, document, readme
             res_imp = runner.invoke(app, ["implement"])
             assert res_imp.exit_code == 0, res_imp.output
 
             res_qa = runner.invoke(app, ["qa"])
             assert res_qa.exit_code == 0, res_qa.output
+
+            res_doc = runner.invoke(app, ["document"])
+            assert res_doc.exit_code == 0, res_doc.output
+
+            res_readme = runner.invoke(app, ["readme"])
+            assert res_readme.exit_code == 0, res_readme.output
 
             # 6. verify (generates signed receipt)
             res_ver = runner.invoke(app, ["verify"])

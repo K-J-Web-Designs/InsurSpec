@@ -96,6 +96,18 @@ COPILOT_PROMPTS: tuple[tuple[str, str, str, str], ...] = (
         "Run `{cli} qa` (or `{cli} qa --feature <slug>`) to generate parameterized QA tests enforcing Article III (Essential Triad) and run `pytest`.",
     ),
     (
+        "insur-document",
+        "Generate Backstage TechDocs in docs/ (architecture, API, data lineage)",
+        "[optional --feature <slug>]",
+        "Run `{cli} document` (or `{cli} document --feature <slug>`) to generate and synchronize `docs/` and `mkdocs.yml` per Article X.",
+    ),
+    (
+        "insur-readme",
+        "Generate or update a comprehensive project README.md",
+        "[optional --feature <slug>]",
+        "Run `{cli} readme` to generate or update `README.md` with setup, architecture, endpoints, compliance, and usage instructions.",
+    ),
+    (
         "insur-verify",
         "Run final Constitution Gate and sign COMPLIANCE_RECEIPT.json",
         "[optional --feature <slug>]",
@@ -512,6 +524,82 @@ def qa(
         raise typer.Exit(code=1)
 
     console.print(f"[bold green]✔ QA generation complete: {result.message}[/bold green] (Test files written: {len(result.files_written)})")
+
+
+def _run_doc_synthesis(
+    task_label: str,
+    prompt_body: str,
+    skills: list[str],
+    feature: Optional[str] = None,
+) -> None:
+    """Shared helper for documentation and README synthesis commands."""
+    root = find_workspace_root()
+    cfg = load_config(root)
+    fsm = PhaseStateMachine(root)
+    registry = FeatureRegistry(root)
+    active_slug = _resolve_active_feature(fsm, feature)
+    spec_file, plan_file, tasks_file = registry.resolve_paths(active_slug)
+
+    mgr = SkillsManager(root)
+    loader = SkillsLoader(mgr)
+    skills_prompt = loader.assemble_skills_context(skills)
+    brownfield_ctx = registry.build_brownfield_context(active_slug=active_slug)
+    system_instructions = _load_constitution_text(root) + skills_prompt + ("\n\n" + brownfield_ctx if brownfield_ctx else "")
+
+    spec_text = spec_file.read_text(encoding="utf-8") if spec_file.is_file() else ""
+    plan_text = plan_file.read_text(encoding="utf-8") if plan_file.is_file() else ""
+    tasks_text = tasks_file.read_text(encoding="utf-8") if tasks_file.is_file() else ""
+
+    full_prompt = (
+        f"{prompt_body}\n\n"
+        f"## Service Metadata\n- Name: {cfg.service_name}\n- LOB: {cfg.line_of_business.upper()}\n- Domain: {cfg.domain}\n\n"
+        f"## Specification\n{spec_text}\n\n"
+        f"## Architecture Plan\n{plan_text}\n\n"
+        f"## Tasks\n{tasks_text}\n"
+    )
+
+    provider = LLMSwitchboard.get_provider(cfg.llm_provider, gemini_model=cfg.gemini_model, bedrock_model=cfg.bedrock_model, aws_region=cfg.aws_region)
+    executor = ImplementExecutor(workspace_root=root, provider=provider)
+
+    console.print(f"[bold cyan]▶ Running {task_label}{f' for {active_slug}' if active_slug else ''}...[/bold cyan]")
+    result = executor.run_loop(tasks_markdown=full_prompt, system_instructions=system_instructions)
+    if not result.success:
+        console.print(f"[bold red]✖ {task_label} halted after {result.attempts} attempt(s):[/bold red] {result.message}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[bold green]✔ {task_label} complete: {result.message}[/bold green] (Files written: {len(result.files_written)})")
+
+
+@app.command()
+def document(
+    feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+):
+    """Generates technical documentation in docs/ synchronized with Backstage TechDocs (Article X)."""
+    _run_doc_synthesis(
+        task_label="Technical Documentation",
+        prompt_body=(
+            "Generate or update technical documentation files in `docs/` (`docs/index.md`, `docs/architecture.md`, "
+            "`docs/api_reference.md`, `docs/data_model.md`) and keep `mkdocs.yml` synchronized per Article X."
+        ),
+        skills=["backstage-techdocs-cataloger", "adr-architectural-decision"],
+        feature=feature,
+    )
+
+
+@app.command()
+def readme(
+    feature: Optional[str] = typer.Option(None, "--feature", "-f", help="Target incremental feature slug"),
+):
+    """Generates or updates a comprehensive root README.md from specs, plan, and repository files."""
+    _run_doc_synthesis(
+        task_label="README Generation",
+        prompt_body=(
+            "Generate or update `README.md` at the repository root with: project overview, architecture summary, "
+            "prerequisites, quickstart/setup commands, API/CLI usage, testing instructions, and compliance notes."
+        ),
+        skills=["backstage-techdocs-cataloger"],
+        feature=feature,
+    )
 
 
 @app.command()
