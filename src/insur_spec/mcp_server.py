@@ -62,6 +62,29 @@ TOOLS_CATALOG = [
 ]
 
 
+RESOURCES_CATALOG = [
+    {"uri": "insurspec://constitution", "name": "10-Article Insurance Constitution", "mimeType": "text/markdown"},
+    {"uri": "insurspec://spec", "name": "Active Feature or Master Specification", "mimeType": "text/markdown"},
+    {"uri": "insurspec://plan", "name": "Active Architecture Plan", "mimeType": "text/markdown"},
+    {"uri": "insurspec://config", "name": "InsurSpec Workspace Configuration", "mimeType": "text/yaml"},
+]
+
+PROMPTS_CATALOG = [
+    {"name": "insur-specify", "description": "Elicit v1 insurance feature requirements into spec.md"},
+    {"name": "insur-feature-add", "description": "Add an incremental brownfield feature preserving root spec.md"},
+    {"name": "insur-grill", "description": "Resolve Ambiguity Triage questions interactively before planning"},
+    {"name": "insur-plan", "description": "Generate technical architecture plan.md and run Constitution Check"},
+    {"name": "insur-tasks", "description": "Deconstruct plan.md into atomic Essential Triad TDD tasks"},
+    {"name": "insur-implement", "description": "Implement tasks.md using active domain skills and 5-Strike Breaker"},
+    {"name": "insur-qa", "description": "Generate Essential Triad QA tests (Happy Path, Key Boundary, Failure)"},
+    {"name": "insur-document", "description": "Generate Backstage TechDocs in docs/ per Article X"},
+    {"name": "insur-readme", "description": "Generate or update comprehensive root README.md"},
+    {"name": "insur-review", "description": "Audit git diff against Constitution and secret hygiene"},
+    {"name": "insur-quick", "description": "Fast-track small fix with mini-spec, targeted edit, and Constitution gate"},
+    {"name": "insur-verify", "description": "Run final Constitution Gate and sign COMPLIANCE_RECEIPT.json"},
+]
+
+
 class InsurSpecMCPServer:
     """Zero-dependency stdio JSON-RPC 2.0 MCP Server for VS Code & Agentic IDEs."""
 
@@ -82,13 +105,36 @@ class InsurSpecMCPServer:
                 req_id,
                 {
                     "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
+                    "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
                     "serverInfo": {"name": "insur-spec", "version": "0.1.0"},
                 },
             )
 
         if method == "tools/list":
             return self._ok(req_id, {"tools": TOOLS_CATALOG})
+
+        if method == "resources/list":
+            return self._ok(req_id, {"resources": RESOURCES_CATALOG})
+
+        if method == "resources/read":
+            uri = params.get("uri", "")
+            try:
+                return self._ok(req_id, {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": self._read_resource(uri)}]})
+            except Exception as e:
+                return self._err(req_id, -32602, str(e))
+
+        if method == "prompts/list":
+            return self._ok(req_id, {"prompts": PROMPTS_CATALOG})
+
+        if method == "prompts/get":
+            prompt_name = params.get("name", "")
+            matched = next((p for p in PROMPTS_CATALOG if p["name"] == prompt_name), None)
+            if not matched:
+                return self._err(req_id, -32602, f"Unknown prompt: {prompt_name}")
+            return self._ok(req_id, {
+                "description": matched["description"],
+                "messages": [{"role": "user", "content": {"type": "text", "text": f"Execute InsurSpec workflow `{prompt_name}` strictly obeying .insur-spec/memory/constitution.md."}}],
+            })
 
         if method == "tools/call":
             tool_name = params.get("name", "")
@@ -160,6 +206,23 @@ class InsurSpecMCPServer:
             return const_file.read_text(encoding="utf-8")
 
         raise ValueError(f"Unknown tool: {name}")
+
+    def _read_resource(self, uri: str) -> str:
+        slug = PhaseStateMachine(self.workspace_root).state.active_feature
+        spec_path, plan_path, _ = FeatureRegistry(self.workspace_root).resolve_paths(slug)
+        if uri == "insurspec://constitution":
+            const_file = self.workspace_root / ".insur-spec" / "memory" / "constitution.md"
+            if not const_file.is_file():
+                const_file = Path(__file__).resolve().parent.parent.parent / "templates" / "constitution.md"
+            return const_file.read_text(encoding="utf-8")
+        if uri == "insurspec://spec":
+            return spec_path.read_text(encoding="utf-8") if spec_path.is_file() else ""
+        if uri == "insurspec://plan":
+            return plan_path.read_text(encoding="utf-8") if plan_path.is_file() else ""
+        if uri == "insurspec://config":
+            cfg_file = self.workspace_root / ".insur-spec" / "config.yaml"
+            return cfg_file.read_text(encoding="utf-8") if cfg_file.is_file() else ""
+        raise ValueError(f"Unknown resource URI: {uri}")
 
     @staticmethod
     def _ok(req_id: Any, result: dict[str, Any]) -> dict[str, Any]:

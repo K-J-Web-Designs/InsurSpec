@@ -2,5 +2,6 @@
 
 from .manager import SkillsManager, SkillMetadata
 from .loader import SkillsLoader
+from .router import SkillRouter
 
-__all__ = ["SkillsManager", "SkillMetadata", "SkillsLoader"]
+__all__ = ["SkillsManager", "SkillMetadata", "SkillsLoader", "SkillRouter"]
