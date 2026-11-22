@@ -9,6 +9,7 @@ from .config import find_workspace_root, load_config
 from .core.audit_signer import AuditSigner
 from .core.constitution_checker import ConstitutionGatekeeper
 from .core.feature_registry import FeatureRegistry
+from .core.legacy_analyzer import LegacyRepoAnalyzer
 from .core.state_machine import PhaseStateMachine
 from .skills.manager import SkillsManager
 
@@ -59,6 +60,16 @@ TOOLS_CATALOG = [
         "description": "Return the active 10-Article Insurance Constitution text.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "insur_spec_analyze_repo",
+        "description": "Deep-dive scan of an existing production repository (languages, entry points, integrations, PII surface, symbols).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "insur_spec_audit_legacy",
+        "description": "Run a non-blocking 10-Article Constitution and secret baseline audit across an existing repository.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -81,6 +92,13 @@ PROMPTS_CATALOG = [
     {"name": "insur-readme", "description": "Generate or update comprehensive root README.md"},
     {"name": "insur-review", "description": "Audit git diff against Constitution and secret hygiene"},
     {"name": "insur-quick", "description": "Fast-track small fix with mini-spec, targeted edit, and Constitution gate"},
+    {"name": "insur-analyze-repo", "description": "Deep-dive legacy repo discovery, architecture docs, PII map, and baseline spec"},
+    {"name": "insur-refactor-plan", "description": "Elicit refactoring goals and generate non-breaking Expand-Contract plan"},
+    {"name": "insur-characterize", "description": "Generate golden-master characterization tests before refactoring legacy code"},
+    {"name": "insur-impact", "description": "Analyze cross-team blast radius across APIs, schemas, and Backstage entities"},
+    {"name": "insur-audit-legacy", "description": "Run non-blocking Constitution & secret baseline scan on a legacy repo"},
+    {"name": "insur-onboard", "description": "Generate a Day-1 Engineer Onboarding Guide from repo analysis"},
+    {"name": "insur-incident-rca", "description": "Triage a production stack trace or DLQ event and propose a safe fix"},
     {"name": "insur-verify", "description": "Run final Constitution Gate and sign COMPLIANCE_RECEIPT.json"},
 ]
 
@@ -204,6 +222,18 @@ class InsurSpecMCPServer:
             if not const_file.is_file():
                 const_file = Path(__file__).resolve().parent.parent.parent / "templates" / "constitution.md"
             return const_file.read_text(encoding="utf-8")
+
+        if name == "insur_spec_analyze_repo":
+            report = LegacyRepoAnalyzer(self.workspace_root).analyze()
+            return report.model_dump_json(indent=2)
+
+        if name == "insur_spec_audit_legacy":
+            report = LegacyRepoAnalyzer(self.workspace_root).analyze()
+            return json.dumps({
+                "total_files": report.total_files,
+                "finding_count": len(report.constitution_findings),
+                "findings": report.constitution_findings,
+            }, indent=2)
 
         raise ValueError(f"Unknown tool: {name}")
 

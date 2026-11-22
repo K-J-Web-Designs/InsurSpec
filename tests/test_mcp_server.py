@@ -54,3 +54,16 @@ def test_mcp_resources_and_prompts(tmp_path: Path):
     prompt_names = [p["name"] for p in prompts_list["result"]["prompts"]]
     assert "insur-review" in prompt_names
     assert "insur-quick" in prompt_names
+    assert "insur-analyze-repo" in prompt_names
+    assert "insur-refactor-plan" in prompt_names
+
+    analyze_resp = server.handle_request({
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "tools/call",
+        "params": {"name": "insur_spec_analyze_repo", "arguments": {}},
+    })
+    assert analyze_resp is not None
+    assert analyze_resp["result"]["isError"] is False
+    parsed_analysis = json.loads(analyze_resp["result"]["content"][0]["text"])
+    assert "total_files" in parsed_analysis

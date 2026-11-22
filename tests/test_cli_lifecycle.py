@@ -37,6 +37,13 @@ def test_full_lifecycle_e2e():
                 "insur-readme",
                 "insur-review",
                 "insur-quick",
+                "insur-analyze-repo",
+                "insur-refactor-plan",
+                "insur-characterize",
+                "insur-impact",
+                "insur-audit-legacy",
+                "insur-onboard",
+                "insur-incident-rca",
                 "insur-verify",
             ):
                 p_file = prompts_dir / f"{prompt_name}.prompt.md"
@@ -91,6 +98,19 @@ def test_full_lifecycle_e2e():
 
             res_grill = runner.invoke(app, ["grill"])
             assert res_grill.exit_code == 0, res_grill.output
+
+            # 5b. Enterprise legacy / brownfield commands
+            assert runner.invoke(app, ["analyze-repo"]).exit_code == 0
+            assert (Path(tmpdir) / "docs" / "REPO_ANALYSIS.md").is_file()
+
+            assert runner.invoke(app, ["audit-legacy"]).exit_code == 0
+            assert (Path(tmpdir) / "docs" / "LEGACY_AUDIT.md").is_file()
+
+            assert runner.invoke(app, ["refactor-plan", "Extract rating engine"]).exit_code == 0
+            assert runner.invoke(app, ["characterize", "src/rating.py", "--dry-run"]).exit_code == 0
+            assert runner.invoke(app, ["impact", "Add deductible field"]).exit_code == 0
+            assert runner.invoke(app, ["onboard", "--dry-run"]).exit_code == 0
+            assert runner.invoke(app, ["incident-rca", "KeyError in FNOL webhook", "--dry-run"]).exit_code == 0
 
             # 6. verify (generates signed receipt)
             res_ver = runner.invoke(app, ["verify"])
