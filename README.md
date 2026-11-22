@@ -12,37 +12,6 @@ Unconstrained AI coding assistants introduce "AI slop" (placeholder stubs, empty
 
 ---
 
-## Architecture Overview
-
-```mermaid
-flowchart TD
-    Dev["Developer / VS Code / Claude Code"] -->|"/insur-specify or /insur-feature-add"| Spec["spec.md + .insur-spec/features/<slug>/"]
-    Spec -->|"/insur-grill"| Grill["Resolve Ambiguity Triage"]
-    Grill -->|"/insur-plan"| Plan["plan.md + ConstitutionGatekeeper"]
-    Plan -->|"/insur-tasks"| Tasks["tasks.md (Essential Triad TDD)"]
-    Tasks -->|"/insur-implement (--dry-run)"| Exec["ImplementExecutor (<<<FILE>>> / <<<EDIT>>>) + SkillRouter"]
-    Exec -->|"/insur-qa"| QA["Focused QA Tests (tests/)"]
-    QA -->|"/insur-document & /insur-readme"| Docs["docs/ + mkdocs.yml + README.md"]
-    Docs -->|"/insur-review"| Review["DiffReviewer + Pre-Commit Hook"]
-    Review -->|"/insur-verify"| Verify["COMPLIANCE_RECEIPT.json (HMAC-SHA256)"]
-```
-
-### Core Components (`src/insur_spec/`)
-- **`cli.py`**: Typer CLI orchestrating the full lifecycle (`init`, `specify`, `grill`, `plan`, `tasks`, `implement`, `qa`, `document`, `readme`, `quick`, `review`, `verify`), `feature` management, `skill` CRUD, `constitution`, and `mcp`.
-- **`core/state_machine.py`**: `PhaseStateMachine` tracking workspace and per-feature phases in `.insur-spec/state.json`.
-- **`core/feature_registry.py`**: `FeatureRegistry` managing incremental brownfield features under `.insur-spec/features/<NNN-slug>/`, appending to `## Feature Delta Log` in root `spec.md`, and generating a Python AST symbol map (`class`/`def` signatures) for brownfield context.
-- **`core/constitution_checker.py`**: `ConstitutionGatekeeper` auditing plans and generated files against the 10-Article Constitution and Backstage `catalog-info.yaml`.
-- **`core/executor.py` & `core/circuit_breaker.py`**: `ImplementExecutor` applying full `<<<FILE: ...>>>` and targeted `<<<EDIT: ...>>>` (`<<<SEARCH>>>` / `<<<REPLACE>>>`) blocks with `--dry-run` unified diff previews, Constitutional pre-write checks, and 5-strike circuit breaking (with log slicing $\le 100$ lines).
-- **`core/reviewer.py`**: `DiffReviewer` auditing `git diff` against the 10-Article Constitution, PII/PHI rules, and hardcoded secret patterns.
-- **`core/audit_signer.py`**: `AuditSigner` emitting HMAC-SHA256 signed `COMPLIANCE_RECEIPT.json` artifacts.
-- **`llm/switchboard.py`**: `LLMSwitchboard` routing between **Google Gemini** (`gemini-3.8-flash` for local/dev) and **AWS Bedrock** (`anthropic.claude-3-5-sonnet-20241022-v2:0` for VPC production), with streaming (`--stream`) and offline mock fallback when API keys are unset.
-- **`skills/manager.py`, `skills/loader.py` & `skills/router.py`**: `SkillsManager` (CRUD + Constitutional Inviolability Gate), `SkillsLoader` (prompt injection), and `SkillRouter` (dynamic skill selection from `spec.md`).
-- **`mcp_server.py`**: Zero-dependency `stdio` JSON-RPC 2.0 MCP server exposing `tools/*`, `resources/*` (`insurspec://constitution`, `spec`, `plan`, `config`), and `prompts/*`.
-
-For deeper component details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
----
-
 ## Quickstart
 
 ### 1. Install InsurSpec
@@ -176,6 +145,49 @@ Inspect any skill with `insur-spec skill get <name>`, or add custom project skil
 - **Data, APIs & Resilience**: `expand-contract-db-migrator`, `temporal-data-versioning`, `backward-compat-api-guard`, `idempotent-event-consumer`, `dead-letter-circuit-breaker`, `saga-orchestration-builder`
 - **Security, Compliance & Governance**: `phi-pii-token-masker`, `sox-glba-control-enforcer`, `static-secret-scanner`, `audit-trail-lineage`, `state-filing-doc-synthesizer`, `adr-architectural-decision`, `backstage-techdocs-cataloger`
 - **Testing & Quality**: `test-triad-generator`, `contract-test-pact-author`, `sonarqube-quality-gate-pass`
+
+---
+
+## Workflow & Architecture Overview
+
+InsurSpec supports three entry tracks depending on whether you are building a new feature, modernizing an existing production repo, or triaging a quick fix:
+
+```mermaid
+flowchart LR
+    subgraph Track1["1. New Feature (v1 or --add)"]
+        S1["/insur-specify\nor /insur-feature-add"] --> G1["/insur-grill\n(Resolve Ambiguities)"] --> P1["/insur-plan\n(Constitution Check)"]
+    end
+
+    subgraph Track2["2. Legacy & Refactoring"]
+        A2["/insur-analyze-repo\n& /insur-audit-legacy"] --> C2["/insur-characterize\n& /insur-impact"] --> R2["/insur-refactor-plan\n(Expand-Contract)"]
+    end
+
+    subgraph Track3["3. Fast-Track & Incidents"]
+        Q3["/insur-quick\nor /insur-incident-rca"]
+    end
+
+    P1 --> Exec["/insur-tasks → /insur-implement\n(SkillRouter + <<<EDIT>>> + 5-Strike Breaker)"]
+    R2 --> Exec
+    Exec --> Quality["/insur-qa → /insur-document → /insur-readme"]
+    Q3 --> Gate["/insur-review\n(Diff & Secret Scan)"]
+    Quality --> Gate
+    Gate --> Cert["/insur-verify\n(COMPLIANCE_RECEIPT.json)"]
+```
+
+### Core Components (`src/insur_spec/`)
+- **`cli.py`**: Typer CLI orchestrating all lifecycle, brownfield, legacy analysis, `feature`, `skill`, `constitution`, and `mcp` commands.
+- **`core/state_machine.py`**: `PhaseStateMachine` tracking workspace and per-feature phases in `.insur-spec/state.json`.
+- **`core/feature_registry.py`**: `FeatureRegistry` managing incremental features under `.insur-spec/features/<NNN-slug>/`, appending to `## Feature Delta Log` in root `spec.md`, and building Python AST symbol maps.
+- **`core/legacy_analyzer.py`**: `LegacyRepoAnalyzer` scanning existing repos for languages, entry points, integrations, PII surfaces, and non-blocking Constitution baselines.
+- **`core/constitution_checker.py`**: `ConstitutionGatekeeper` auditing plans and generated files against the 10-Article Constitution and Backstage `catalog-info.yaml`.
+- **`core/executor.py` & `core/circuit_breaker.py`**: `ImplementExecutor` applying `<<<FILE>>>` and targeted `<<<EDIT>>>` blocks with `--dry-run` diffs, pre-write Constitutional checks, and 5-strike circuit breaking ($\le 100$-line log slicing).
+- **`core/reviewer.py`**: `DiffReviewer` auditing `git diff` against the Constitution, PII/PHI rules, and hardcoded secret patterns.
+- **`core/audit_signer.py`**: `AuditSigner` emitting HMAC-SHA256 signed `COMPLIANCE_RECEIPT.json` artifacts.
+- **`llm/switchboard.py`**: `LLMSwitchboard` routing between **Google Gemini** and **AWS Bedrock**, with `--stream` support and offline mock fallback.
+- **`skills/manager.py`, `skills/loader.py` & `skills/router.py`**: `SkillsManager` (CRUD + Constitutional Gate), `SkillsLoader`, and `SkillRouter` (dynamic skill selection).
+- **`mcp_server.py`**: Zero-dependency `stdio` JSON-RPC 2.0 MCP server exposing `tools/*`, `resources/*`, and `prompts/*`.
+
+For deeper component details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
