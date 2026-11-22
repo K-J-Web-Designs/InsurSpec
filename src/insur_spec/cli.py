@@ -21,6 +21,7 @@ from .core.circuit_breaker import CircuitBreaker
 from .core.audit_signer import AuditSigner
 from .core.executor import ImplementExecutor
 from .core.feature_registry import FeatureRegistry
+from .core.legacy_analyzer import LegacyRepoAnalyzer
 from .core.reviewer import DiffReviewer
 from .llm.switchboard import LLMSwitchboard
 from .mcp_server import InsurSpecMCPServer
@@ -151,6 +152,48 @@ COPILOT_PROMPTS: tuple[tuple[str, str, str, str], ...] = (
         "Fast-track small fix with mini-spec, targeted edit, and Constitution gate",
         "[small fix or task]",
         "Run `{cli} quick \"<task>\" --verify-cmd \"pytest\"` for a lightweight single-command Constitution-guarded change.",
+    ),
+    (
+        "insur-analyze-repo",
+        "Deep-dive legacy repo discovery, architecture docs, PII map, and baseline spec",
+        "[optional --dry-run]",
+        "Run `{cli} analyze-repo` (or MCP tool `insur_spec_analyze_repo`) to inventory languages, entry points, integrations, PII surfaces, and generate baseline `docs/REPO_ANALYSIS.md` + `docs/architecture.md`.",
+    ),
+    (
+        "insur-refactor-plan",
+        "Elicit refactoring goals and generate non-breaking Expand-Contract plan",
+        "[refactor goal or target module]",
+        "Ask the user what needs to change, why, and any zero-downtime constraints, then run `{cli} refactor-plan \"<goal>\"` to generate a phased Strangler-Fig / Expand-Contract `plan.md`.",
+    ),
+    (
+        "insur-characterize",
+        "Generate golden-master characterization tests before refactoring legacy code",
+        "[target file or module]",
+        "Run `{cli} characterize \"<target>\"` to generate characterization tests in `tests/` locking in current behavior before refactoring.",
+    ),
+    (
+        "insur-impact",
+        "Analyze cross-team blast radius across APIs, schemas, and Backstage entities",
+        "[proposed API or schema change]",
+        "Run `{cli} impact \"<proposed change>\"` to identify affected endpoints, tables, `catalog-info.yaml` dependencies, and downstream teams.",
+    ),
+    (
+        "insur-audit-legacy",
+        "Run non-blocking Constitution & secret baseline scan on a legacy repo",
+        "",
+        "Run `{cli} audit-legacy` (or MCP tool `insur_spec_audit_legacy`) to generate a prioritized remediation backlog in `docs/LEGACY_AUDIT.md`.",
+    ),
+    (
+        "insur-onboard",
+        "Generate a Day-1 Engineer Onboarding Guide from repo analysis",
+        "",
+        "Run `{cli} onboard` to generate `docs/ONBOARDING.md` with local setup, key flows, domain ownership, and active skills.",
+    ),
+    (
+        "insur-incident-rca",
+        "Triage a production stack trace or DLQ event and propose a safe fix",
+        "[stack trace or incident summary]",
+        "Run `{cli} incident-rca \"<incident>\"` to mask PII, locate root cause, propose a targeted `<<<EDIT>>>` fix + regression test, and draft an ADR/postmortem.",
     ),
     (
         "insur-verify",
@@ -826,6 +869,235 @@ def review(
         raise typer.Exit(code=1)
 
     console.print(f"[bold green]✔ Diff Review PASSED ({report.files_reviewed} file(s), 0 blocker findings).[/bold green]")
+
+
+# -----------------------------------------------------------------------------
+# ENTERPRISE LEGACY & MATURE ECOSYSTEM COMMANDS
+# -----------------------------------------------------------------------------
+
+@app.command("analyze-repo")
+def analyze_repo(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview generated documentation diffs without writing"),
+):
+    """Deep-dive legacy repository discovery: inventory, PII surface, baseline spec, and docs."""
+    root = find_workspace_root()
+    analyzer = LegacyRepoAnalyzer(root)
+    report = analyzer.analyze()
+    summary_md = analyzer.format_markdown_summary(report)
+
+    if not dry_run:
+        docs_dir = root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "REPO_ANALYSIS.md").write_text(summary_md, encoding="utf-8")
+
+    console.print(Panel(
+        f"[bold green]✔ Repository Analysis Complete[/bold green]\n\n"
+        f"• [cyan]Files Scanned:[/cyan] {report.total_files}\n"
+        f"• [cyan]Languages:[/cyan] {', '.join(report.languages.keys()) or 'N/A'}\n"
+        f"• [cyan]Integrations:[/cyan] {', '.join(report.detected_integrations) or 'None'}\n"
+        f"• [cyan]PII Surface Files:[/cyan] {len(report.pii_surface_files)}\n"
+        f"• [cyan]Legacy Findings:[/cyan] {len(report.constitution_findings)}\n"
+        f"• [cyan]Report:[/cyan] {'Dry-run only' if dry_run else 'docs/REPO_ANALYSIS.md'}",
+        title="Legacy Repo Deep-Dive",
+    ))
+
+    _run_doc_synthesis(
+        task_label="Legacy Architecture & Baseline Spec",
+        prompt_body=(
+            "Using the repository analysis below, generate or update `docs/architecture.md` (with Mermaid C4 diagram), "
+            "`docs/data_model.md` (documenting PII/PHI surfaces), and a reverse-engineered baseline `spec.md` if missing.\n\n"
+            f"{summary_md}"
+        ),
+        skills=["backstage-techdocs-cataloger", "phi-pii-token-masker", "adr-architectural-decision"],
+        dry_run=dry_run,
+    )
+
+
+@app.command("refactor-plan")
+def refactor_plan(
+    goal: Optional[str] = typer.Argument(None, help="Refactoring objective (prompted interactively if omitted)"),
+    constraints: str = typer.Option("Zero downtime, backward-compatible APIs", "--constraints", "-c", help="Operational constraints"),
+    stream: bool = typer.Option(False, "--stream", help="Stream LLM output live to terminal"),
+):
+    """Elicits refactoring changes and generates a non-breaking Expand-Contract / Strangler-Fig plan.md."""
+    root = find_workspace_root()
+    cfg = load_config(root)
+    fsm = PhaseStateMachine(root)
+    registry = FeatureRegistry(root)
+
+    refactor_goal = goal or typer.prompt("Describe the refactoring changes to make to this repository")
+    report = LegacyRepoAnalyzer(root).analyze()
+    summary_md = LegacyRepoAnalyzer(root).format_markdown_summary(report)
+    brownfield_ctx = registry.build_brownfield_context()
+
+    plan_tmpl = (TEMPLATES_DIR / "plan_template.md").read_text(encoding="utf-8")
+    rendered_base = Template(plan_tmpl).render(feature_title=f"Refactor: {refactor_goal[:50]}", service_name=cfg.service_name)
+
+    prompt = (
+        f"Generate a phased, zero-downtime refactoring plan (Strangler-Fig + Expand-Contract) matching the template.\n"
+        f"Include characterization tests BEFORE behavior changes and enforce `## 5. Mandatory Constitution Check`.\n\n"
+        f"Refactor Goal: {refactor_goal}\nConstraints: {constraints}\n\n"
+        f"{summary_md}\n\n{brownfield_ctx}\n\nTemplate:\n{rendered_base}"
+    )
+
+    mgr = SkillsManager(root)
+    skills_ctx = SkillsLoader(mgr).assemble_skills_context(["backward-compat-api-guard", "expand-contract-db-migrator", "sonarqube-quality-gate-pass"])
+    provider = LLMSwitchboard.get_provider(cfg.llm_provider, gemini_model=cfg.gemini_model, bedrock_model=cfg.bedrock_model, aws_region=cfg.aws_region)
+    llm_output = _generate_text(provider, prompt=prompt, system_instructions=_load_constitution_text(root) + skills_ctx, stream=stream)
+
+    plan_file = root / "plan.md"
+    plan_file.write_text(rendered_base if _is_mock_response(llm_output) else llm_output, encoding="utf-8")
+
+    audit = ConstitutionGatekeeper(root).audit_plan(plan_file)
+    if not audit.is_compliant:
+        console.print("[bold red]✖ Refactor Plan FAILED Constitution Gate:[/bold red]")
+        for v in audit.violations:
+            console.print(f"  • [{v['severity']}] {v['article']} - {v['description']}")
+        raise typer.Exit(code=1)
+
+    fsm.state.last_plan_path = str(plan_file)
+    fsm.transition(LifecyclePhase.PLANNED, {"refactor_goal": refactor_goal, "compliant": True})
+    console.print(f"[bold green]✔ Refactor plan authored at plan.md and passed Constitution Check.[/bold green]")
+
+
+@app.command()
+def characterize(
+    target: str = typer.Argument(..., help="Target legacy module, endpoint, or file path to characterize"),
+    verify_cmd: Optional[str] = typer.Option(None, "--verify-cmd", help="Optional test command (e.g. 'pytest')"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview unified diffs without writing"),
+):
+    """Generates golden-master characterization tests before refactoring legacy code."""
+    root = find_workspace_root()
+    cfg = load_config(root)
+    registry = FeatureRegistry(root)
+    mgr = SkillsManager(root)
+    skills_ctx = SkillsLoader(mgr).assemble_skills_context(["test-triad-generator", "contract-test-pact-author"])
+    brownfield_ctx = registry.build_brownfield_context()
+
+    provider = LLMSwitchboard.get_provider(cfg.llm_provider, gemini_model=cfg.gemini_model, bedrock_model=cfg.bedrock_model, aws_region=cfg.aws_region)
+    executor = ImplementExecutor(workspace_root=root, provider=provider)
+    verify_fn = (lambda: ImplementExecutor.run_shell_check(verify_cmd.split(), root)) if verify_cmd else None
+
+    prompt = (
+        f"Generate characterization tests in `tests/` capturing the current production behavior of `{target}` "
+        f"so subsequent refactoring cannot introduce silent regressions. Use parameterized inputs and zero vanity tests."
+    )
+    result = executor.run_loop(
+        tasks_markdown=prompt,
+        system_instructions=_load_constitution_text(root) + skills_ctx + "\n\n" + brownfield_ctx,
+        verify_fn=verify_fn,
+        dry_run=dry_run,
+    )
+    if not result.success:
+        console.print(f"[bold red]✖ Characterization failed:[/bold red] {result.message}")
+        raise typer.Exit(code=1)
+    if dry_run:
+        _print_dry_run_diffs(result.diffs)
+        return
+    console.print(f"[bold green]✔ Characterization tests ready: {result.message}[/bold green] (Files: {len(result.files_written)})")
+
+
+@app.command()
+def impact(
+    change: str = typer.Argument(..., help="Proposed API, schema, or event change to evaluate"),
+):
+    """Analyzes cross-team blast radius across APIs, DB schemas, and Backstage catalog entities."""
+    root = find_workspace_root()
+    analyzer = LegacyRepoAnalyzer(root)
+    report = analyzer.analyze()
+    catalog_text = (root / "catalog-info.yaml").read_text(encoding="utf-8") if (root / "catalog-info.yaml").is_file() else "None"
+
+    tokens = [t for t in change.lower().split() if len(t) > 3]
+    matched_symbols = [s for s in report.symbols if any(t in s.lower() for t in tokens)]
+
+    console.print(Panel(
+        f"[bold cyan]Proposed Change:[/bold cyan] {change}\n"
+        f"• [cyan]Detected Integrations at Risk:[/cyan] {', '.join(report.detected_integrations) or 'None'}\n"
+        f"• [cyan]Matching Symbols ({len(matched_symbols)}):[/cyan] {', '.join(matched_symbols[:10]) or 'None directly matched'}\n"
+        f"• [cyan]PII Surface Files:[/cyan] {len(report.pii_surface_files)}\n"
+        f"• [cyan]Backstage Catalog Present:[/cyan] {'Yes' if catalog_text != 'None' else 'No'}\n\n"
+        f"[yellow]Recommendation:[/yellow] Run `insur-spec characterize` and enforce `backward-compat-api-guard` / Pact contracts before modifying shared interfaces.",
+        title="Cross-Team Blast Radius Report",
+    ))
+
+
+@app.command("audit-legacy")
+def audit_legacy():
+    """Runs a non-blocking Constitution and secret baseline scan on an existing repo."""
+    root = find_workspace_root()
+    report = LegacyRepoAnalyzer(root).analyze()
+    docs_dir = root / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        "# Legacy Constitution & Compliance Baseline Audit\n",
+        f"- **Files Scanned:** {report.total_files}",
+        f"- **Total Findings:** {len(report.constitution_findings)}\n",
+        "## Prioritized Remediation Backlog\n",
+    ]
+    for idx, f in enumerate(report.constitution_findings, start=1):
+        lines.append(f"{idx}. **[{f['severity']}] {f['article']}** — {f['description']} (`{f['file_path']}:{f['line_number']}`)")
+    if not report.constitution_findings:
+        lines.append("Zero Constitutional or secret findings detected.")
+
+    audit_path = docs_dir / "LEGACY_AUDIT.md"
+    audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    console.print(f"[bold green]✔ Legacy audit complete ({len(report.constitution_findings)} finding(s)) → docs/LEGACY_AUDIT.md[/bold green]")
+
+
+@app.command()
+def onboard(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview unified diffs without writing"),
+):
+    """Generates a Day-1 Engineer Onboarding Guide (docs/ONBOARDING.md) from repo analysis."""
+    root = find_workspace_root()
+    analyzer = LegacyRepoAnalyzer(root)
+    summary_md = analyzer.format_markdown_summary(analyzer.analyze())
+    _run_doc_synthesis(
+        task_label="Developer Onboarding Guide",
+        prompt_body=(
+            "Generate `docs/ONBOARDING.md` for engineers joining this repository in a 1,200-person IT org: "
+            "local environment setup, entry points, key business flows, external integrations, PII boundaries, and test commands.\n\n"
+            f"{summary_md}"
+        ),
+        skills=["backstage-techdocs-cataloger"],
+        dry_run=dry_run,
+    )
+
+
+@app.command("incident-rca")
+def incident_rca(
+    incident: str = typer.Argument(..., help="Stack trace, error message, or DLQ event summary"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview unified diffs without writing"),
+):
+    """Triages a production incident, locates root cause, and proposes a safe fix + regression test."""
+    root = find_workspace_root()
+    cfg = load_config(root)
+    registry = FeatureRegistry(root)
+    mgr = SkillsManager(root)
+    skills_ctx = SkillsLoader(mgr).assemble_skills_context(["phi-pii-token-masker", "dead-letter-circuit-breaker", "test-triad-generator", "adr-architectural-decision"])
+    brownfield_ctx = registry.build_brownfield_context()
+
+    provider = LLMSwitchboard.get_provider(cfg.llm_provider, gemini_model=cfg.gemini_model, bedrock_model=cfg.bedrock_model, aws_region=cfg.aws_region)
+    executor = ImplementExecutor(workspace_root=root, provider=provider)
+    prompt = (
+        f"Triage this production incident (mask any PII/PHI in outputs):\n{incident}\n\n"
+        "1. Propose a minimal `<<<EDIT>>>` fix.\n"
+        "2. Add an Essential Triad regression test in `tests/`.\n"
+        "3. Draft a brief RCA summary in `docs/adr/`."
+    )
+    result = executor.run_loop(
+        tasks_markdown=prompt,
+        system_instructions=_load_constitution_text(root) + skills_ctx + "\n\n" + brownfield_ctx,
+        dry_run=dry_run,
+    )
+    if not result.success:
+        console.print(f"[bold red]✖ Incident RCA halted:[/bold red] {result.message}")
+        raise typer.Exit(code=1)
+    if dry_run:
+        _print_dry_run_diffs(result.diffs)
+        return
+    console.print(f"[bold green]✔ Incident RCA & fix complete: {result.message}[/bold green] (Files: {len(result.files_written)})")
 
 
 @app.command()

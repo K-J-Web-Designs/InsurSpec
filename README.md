@@ -64,7 +64,7 @@ insur-spec init --name fnol-intake --lob pnc --domain claims --provider gemini
 `insur-spec init` automatically scaffolds:
 - `.insur-spec/config.yaml`, `.insur-spec/state.json`, `.insur-spec/memory/constitution.md`, `.insur-spec/skills/`
 - **Backstage.io**: `catalog-info.yaml`, `mkdocs.yml`, `docs/index.md`
-- **VS Code**: `.vscode/tasks.json`, `.vscode/mcp.json`, `AGENTS.md`, `.github/copilot-instructions.md`, and 12 `.github/prompts/*.prompt.md` slash commands
+- **VS Code**: `.vscode/tasks.json`, `.vscode/mcp.json`, `AGENTS.md`, `.github/copilot-instructions.md`, and 19 `.github/prompts/*.prompt.md` slash commands
 - **Claude Code & Git Hooks**: `CLAUDE.md`, `.claude/commands/insur-*.md`, `.claude/settings.json`, and `.git/hooks/pre-commit` (when `.git/` is present)
 
 ### 3. Run the Spec-Driven Workflow (v1)
@@ -119,7 +119,7 @@ Root `spec.md` remains your **Living Master Specification**, with a `## Feature 
 ## VS Code & Claude Code Integration
 
 ### Slash Commands (`.github/prompts/*.prompt.md` & `.claude/commands/*.md`)
-Type `/` in **VS Code Copilot Chat** or **Claude Code** in any initialized workspace to see all 12 InsurSpec commands with tooltips:
+Type `/` in **VS Code Copilot Chat** or **Claude Code** in any initialized workspace to see all 19 InsurSpec commands with tooltips:
 
 | Slash Command | Purpose |
 | :--- | :--- |
@@ -134,14 +134,21 @@ Type `/` in **VS Code Copilot Chat** or **Claude Code** in any initialized works
 | `/insur-readme` | Generate or update a comprehensive root `README.md` |
 | `/insur-review` | Audit git diff against Constitution, PII/PHI, and secret hygiene |
 | `/insur-quick` | Fast-track small fix with mini-spec, targeted edit, and Constitution gate |
+| `/insur-analyze-repo` | Deep-dive legacy repo discovery, architecture docs, PII map, and baseline spec |
+| `/insur-refactor-plan` | Elicit refactoring goals and generate non-breaking Expand-Contract plan |
+| `/insur-characterize` | Generate golden-master characterization tests before refactoring legacy code |
+| `/insur-impact` | Analyze cross-team blast radius across APIs, schemas, and Backstage entities |
+| `/insur-audit-legacy` | Run non-blocking Constitution & secret baseline scan (`docs/LEGACY_AUDIT.md`) |
+| `/insur-onboard` | Generate a Day-1 Engineer Onboarding Guide (`docs/ONBOARDING.md`) |
+| `/insur-incident-rca` | Triage a production stack trace or DLQ event and propose a safe fix |
 | `/insur-verify` | Run final Constitution Gate and sign `COMPLIANCE_RECEIPT.json` |
 
 ### VS Code Tasks & MCP Server
 - **Tasks (`Ctrl+Shift+P` → `Tasks: Run Task`)**: Pre-configured tasks in `.vscode/tasks.json` for every lifecycle command, skill listing, skill creation, and Constitution viewing.
 - **MCP Server (`.vscode/mcp.json`)**:
-  - **Tools**: `insur_spec_audit_plan`, `insur_spec_feature_list`, `insur_spec_skill_list`, `insur_spec_skill_get`, `insur_spec_verify`, `insur_spec_constitution`
+  - **Tools**: `insur_spec_audit_plan`, `insur_spec_feature_list`, `insur_spec_skill_list`, `insur_spec_skill_get`, `insur_spec_verify`, `insur_spec_constitution`, `insur_spec_analyze_repo`, `insur_spec_audit_legacy`
   - **Resources**: `insurspec://constitution`, `insurspec://spec`, `insurspec://plan`, `insurspec://config`
-  - **Prompts**: All 12 `/insur-*` workflows via `prompts/list` & `prompts/get`
+  - **Prompts**: All 19 `/insur-*` workflows via `prompts/list` & `prompts/get`
 
 ---
 

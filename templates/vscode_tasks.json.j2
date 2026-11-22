@@ -136,6 +136,36 @@
         "reveal": "always",
         "panel": "shared"
       }
+    },
+    {
+      "label": "InsurSpec: Analyze Legacy Repo (/analyze-repo)",
+      "type": "shell",
+      "command": "{{ cli_command }} analyze-repo",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: Create Refactor Plan (/refactor-plan)",
+      "type": "shell",
+      "command": "{{ cli_command }} refactor-plan \"${input:featureDirective}\"",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "InsurSpec: Audit Legacy Baseline (/audit-legacy)",
+      "type": "shell",
+      "command": "{{ cli_command }} audit-legacy",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
     }
   ]
 }
