@@ -23,3 +23,24 @@ spec:
   lifecycle: experimental
   owner: user:default/kris
   system: ai-ventures
+  providesApis:
+    - insurspec-mcp-api
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: insurspec-mcp-api
+  title: InsurSpec MCP Server
+  description: Model Context Protocol (MCP) server interface for InsurSpec skills factory and constitutional governance.
+spec:
+  type: mcp
+  lifecycle: experimental
+  owner: user:default/kris
+  system: ai-ventures
+  definition: |
+    protocol: Model Context Protocol (MCP)
+    transport: stdio / sse
+    capabilities:
+      - Constitutional Governance
+      - 26-Skill Insurance Factory
+      - Backstage.io Integration
