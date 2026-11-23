@@ -1,0 +1,25 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: insurspec
+  title: InsurSpec
+  description: Sovereign spec-driven coding agent CLI with constitutional governance, 26-skill factory, MCP server, and Backstage.io integration.
+  annotations:
+    github.com/project-slug: K-J-Web-Designs/InsurSpec
+  tags:
+    - ai-agent
+    - cli
+    - cybertron
+    - python
+    - typer
+    - gemini
+    - docker
+  links:
+    - url: https://github.com/K-J-Web-Designs/InsurSpec
+      title: GitHub Repository
+      icon: github
+spec:
+  type: ai-agent
+  lifecycle: experimental
+  owner: user:default/kris
+  system: ai-ventures
