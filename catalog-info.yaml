@@ -6,6 +6,7 @@ metadata:
   description: Sovereign spec-driven coding agent CLI with constitutional governance, 26-skill factory, MCP server, and Backstage.io integration.
   annotations:
     github.com/project-slug: K-J-Web-Designs/InsurSpec
+    backstage.io/techdocs-ref: dir:.
   tags:
     - ai-agent
     - cli
