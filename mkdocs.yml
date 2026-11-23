@@ -1,0 +1,7 @@
+site_name: InsurSpec
+nav:
+  - Overview: index.md
+  - Architecture: ARCHITECTURE.md
+  - Project Charter: INSURSPEC_PROJECT_CHARTER.md
+plugins:
+  - techdocs-core
